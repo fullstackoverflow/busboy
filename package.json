@@ -6,7 +6,7 @@
   "types": "./dist/lib/index.d.ts",
   "repository": {
     "type": "git",
-    "url": "https://github.com/fullstackoverflow/util"
+    "url": "https://github.com/fullstackoverflow/busboy"
   },
   "scripts": {
     "build": "tsc",
