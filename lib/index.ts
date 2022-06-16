@@ -1,4 +1,4 @@
-import Busboy from 'busboy';
+import busboy from "busboy";
 import { IncomingMessage } from 'http';
 import { Context } from 'koa';
 
@@ -29,86 +29,54 @@ export function middleware<T>(onFile: onFile<T>) {
     }
 }
 
-export class BusBoy<T> extends Busboy {
-    private CustomOnFile: onFile<T>;
+type Result = {
+    fields: any,
+    files: any
+}
 
-    private fields: Object = {};
+export class BusBoy<T> {
 
-    private files = [];
+    private _parse: Promise<Result>
 
-    private onEnd: (...args: any[]) => void
+    private instance: ReturnType<typeof busboy>;
 
     constructor(
         options: busboy.BusboyConfig,
         onFile: onFile<T>
     ) {
-        super(options);
-        this.CustomOnFile = onFile;
+        this.instance = busboy(options);
+        this._parse = new Promise<Result>((resolve, reject) => {
+            const result: Result = {
+                fields: {},
+                files: {}
+            };
+            const promises: Promise<void>[] = [];
+            this.instance.on('file', (name, file, info) => {
+                promises.push(new Promise(async (res, rej) => {
+                    try {
+                        const obj = await onFile(name, file, info.filename, info.encoding, info.mimeType);
+                        result.files[name] = obj;
+                        res();
+                    } catch (e) {
+                        rej(e);
+                    }
+                }))
+            });
+            this.instance.on('field', (name, val, info) => {
+                result.fields[name] = val;
+            });
+            this.instance.on('finish', () => {
+                Promise.all(promises).then(() => {
+                    resolve(result);
+                }).catch(e => {
+                    reject(e);
+                });
+            });
+        });
     }
 
-    private clean() {
-        return () => {
-            this.removeListener('field', this.onField);
-            this.removeListener('file', this.onFile);
-            if (this.onEnd) {
-                this.removeListener('end', this.onEnd);
-                this.removeListener('error', this.onEnd);
-                this.removeListener('partsLimit', this.onEnd);
-                this.removeListener('filesLimit', this.onEnd);
-                this.removeListener('fieldsLimit', this.onEnd);
-                this.removeListener('finish', this.onEnd);
-            }
-        }
-    }
-
-    private onField(fields: string, name: any, fieldnameTruncated: boolean, valTruncated: boolean, encoding: string, mimetype: string) {
-        this.fields[fields] = name;
-    }
-
-    private onFile(fieldname: string, file: NodeJS.ReadableStream, filename: string, encoding: string, mimetype: string, cache: any) {
-        this.files.push({ field: fieldname, result: this.CustomOnFile(fieldname, file, filename, encoding, mimetype) });
-    }
-
-    private onEndFactory(resolve, reject) {
-        const OnEnd = (err) => {
-            if (err) {
-                return reject(err);
-            }
-            this.clean();
-            Promise.all(this.files.map(async i => ({ field: i.field, result: await i.result }))).then(i => {
-                resolve({
-                    fields: this.fields,
-                    files: i.reduce((pre, curr) => {
-                        pre[curr.field] = curr.result;
-                        return pre;
-                    }, {})
-                })
-            }).catch(reject);
-        }
-        return OnEnd;
-    }
-
-
-    async parse(req: IncomingMessage): Promise<{ fields: any, files: any }> {
-        return new Promise((resolve, reject) => {
-            this.onEnd = this.onEndFactory(resolve, reject);
-            this.on('field', this.onField)
-                .on('file', this.onFile)
-                .on('partsLimit', () => {
-                    this.clean();
-                    reject("partsLimit");
-                })
-                .on('filesLimit', () => {
-                    this.clean();
-                    reject("filesLimit");
-                })
-                .on('fieldsLimit', () => {
-                    this.clean();
-                    reject("filesLimit");
-                })
-                .on('finish', this.onEnd)
-            req.pipe(this);
-        })
-
+    async parse(req: IncomingMessage): Promise<Result> {
+        req.pipe(this.instance);
+        return this._parse;
     }
 }
